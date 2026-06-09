@@ -1,8 +1,8 @@
-// If installed from npm, use:
-// import { ScreepsHttpClient } from 'screeps-api'
-import { ScreepsHttpClient } from '../src'
 import readline from 'node:readline'
 import util from 'node:util'
+// If installed from npm, use:
+// import { ScreepsHttpClient } from 'screeps-api'
+import { ScreepsHttpClient, ServerAuthEvent, ServerAuthStatus } from '../src'
 
 const input = process.stdin
 const output = process.stdout
@@ -40,11 +40,12 @@ function run () {
 
   rl.on('close', quit)
 
-  api.on('message', (msg) => {
-    console.log(msg)
-    if (msg.slice(0, 7) == 'auth ok') {
+  api.socket.on('auth', (event: ServerAuthEvent) => {
+    if (event.data.status === ServerAuthStatus.OK) {
       api.socket.subscribe('/console')
       console.log('Console connected')
+    } else {
+      console.error(`WebSocket API authentication failed`)
     }
   })
 

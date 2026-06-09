@@ -1,24 +1,33 @@
+import { mkdir, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 // If installed from npm, use:
 // import { ScreepsHttpClient } from 'screeps-api'
-import { ScreepsHttpClient } from '../src'
-import fs from 'node:fs/promises'
+import { ScreepsHttpClient, ServerAuthEvent, ServerAuthStatus, UserCodeEvent } from '../src'
 
 const api = await ScreepsHttpClient.fromConfig('main')
 
-api.socket.on('message', (msg) => {
-  // console.log('MSG', msg)
-  if (msg.slice(0, 7) == 'auth ok') {
+api.socket.on('auth', (event: ServerAuthEvent) => {
+  if (event.data.status === ServerAuthStatus.OK) {
     api.socket.subscribe('/code')
+  } else {
+    console.error(`WebSocket API authentication failed`)
   }
 })
 
-// Upload your code to trigger this.
-api.on('code', async (msg) => {
-  let [_user, data] = msg
-  await fs.mkdir(data.branch)
-  for (const moduleName in data.modules) {
-    let file = `${data.branch}/${moduleName}.js`
-    void fs.writeFile(file, data.modules[moduleName])
-    console.log('Wrote', file)
+// Upload your code to trigger this event
+api.on('code', async (event: UserCodeEvent) => {
+  await mkdir(event.data.branch)
+
+  for (const moduleName in event.data.modules) {
+    // If module value is an object with a `binary` property, it's a WASM module
+    const module = event.data.modules[moduleName]
+    const [ext, encoding, contents]: [string, BufferEncoding, string] = typeof module === 'string'
+      ? ['.js', 'utf-8', module]
+      : ['.wasm', 'binary', module.binary]
+
+    const modulePath = path.join(event.data.branch, `${moduleName}.${ext}`)
+    void writeFile(modulePath, contents, { encoding })
+
+    console.log(`Wrote ${modulePath} (${contents.length} bytes)`)
   }
 })

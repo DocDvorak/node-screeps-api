@@ -5,11 +5,13 @@ import process from 'node:process'
 import URL from 'node:url'
 import { parse } from 'yaml'
 
+/** Default value of {@link ScreepsRawServerConfig | ScreepsRawServerConfig.hostname} */
 export const DEFAULT_SERVER_HOST = 'screeps.com'
+/** Default value of {@link ScreepsRawServerConfig | ScreepsRawServerConfig.path} */
 export const DEFAULT_SERVER_PATH = '/'
 
-/** Defaults for {@link ClientConfig} */
-export const DEFAULT_CLIENT_CONFIG: Readonly<ClientConfig> = {
+/** Defaults for {@link ScreepsClientConfig} */
+export const DEFAULT_CLIENT_CONFIG = {
   retry429Global: true,
   retry429InitDelay: 60_000, // 1 minute
   retry429MaxDelay: 10_800_000, // 3 hours
@@ -30,9 +32,10 @@ const debug = Debug('screepsapi:config')
 /**
  * Provides features to find and load save configuration files.
  *
- * This class supports the {@link YamlConfig | SS3 Unified Credentials File}
- * format as well as the {@link JsonConfig | JSON format} commonly used by many
- * bot code upload tools.
+ * This class supports the {@link ScreepsYamlConfig | SS3 Unified Credentials File}
+ * format as well as the {@link ScreepsJsonConfig | screeps.json format}
+ * used by many Screeps code upload tools.
+ * @document ../guides/configuration.md
  */
 export class ScreepsConfigManager {
   private _defaultPaths?: readonly string[]
@@ -98,13 +101,13 @@ export class ScreepsConfigManager {
    * checked in order until.
    * @param serverName the name of the server to use from the credential file
    * @param opts see {@link LoadConfigOptions}
-   * @returns a valid {@link Config} if one was found
+   * @returns a valid {@link ScreepsHttpConfig} if one was found
    * @throws {Error} if a file exists but the contents are invalid/malformed
    */
   async loadConfig(
     serverName: string,
     opts?: LoadConfigOptions
-  ): Promise<Config | null> {
+  ): Promise<ScreepsHttpConfig | null> {
     if (opts?.file) {
       const config = await this.loadNormalizedConfig(opts.file, serverName, opts)
       if (config) {
@@ -128,7 +131,7 @@ export class ScreepsConfigManager {
     file: string,
     serverName: string,
     opts?: LoadConfigOptions
-  ): Promise<Config | null> {
+  ): Promise<ScreepsHttpConfig | null> {
     const parsed = await this.loadFile(file)
     if (!parsed) {
       return null
@@ -142,11 +145,11 @@ export class ScreepsConfigManager {
     }
   }
 
-  async loadFile(file: string): Promise<JsonConfig | YamlConfig | null> {
+  async loadFile(file: string): Promise<ScreepsJsonConfig | ScreepsYamlConfig | null> {
     try {
       const contents = await readFile(file, { encoding: 'utf8' })
       if (!file.endsWith('.json')) {
-        const data = parse(contents) as YamlConfig
+        const data = parse(contents) as ScreepsYamlConfig
         if (!data.servers) {
           throw new Error(
             `Invalid config: "servers" object does not exist in "${file}"`
@@ -161,7 +164,7 @@ export class ScreepsConfigManager {
           `Invalid config: found ${typeof data} instead of a JSON object at "${file}"`
         )
       }
-      return data as JsonConfig
+      return data as ScreepsJsonConfig
     } catch (e) {
       if ((e as { code?: string }).code === 'ENOENT') {
         return null
@@ -172,10 +175,10 @@ export class ScreepsConfigManager {
   }
 
   normalizeServersConfig(
-    parsed: JsonConfig | YamlConfig,
+    parsed: ScreepsJsonConfig | ScreepsYamlConfig,
     serverName: string
-  ): ServerConfig {
-    const servers = ('servers' in parsed) ? parsed.servers as JsonConfig : parsed
+  ): ScreepsServerConfig {
+    const servers = ('servers' in parsed) ? parsed.servers as ScreepsJsonConfig : parsed
     const rawServer = servers[serverName]
     if (!rawServer) {
       const list = Object.keys(servers).join(', ')
@@ -188,7 +191,7 @@ export class ScreepsConfigManager {
     return this.normalizeServerConfig(rawServer)
   }
 
-  normalizeServerConfig(rawServer: RawServerConfig): ServerConfig {
+  normalizeServerConfig(rawServer: ScreepsRawServerConfig): ScreepsServerConfig {
     let url = rawServer.url
     if (!url) {
       rawServer.protocol ??= (rawServer.secure !== false ? 'https' : 'http')
@@ -207,7 +210,7 @@ export class ScreepsConfigManager {
     }
     if (!url.endsWith('/')) url += '/'
 
-    const server: ServerConfig = { url }
+    const server: ScreepsServerConfig = { url }
 
     if (rawServer.token) {
       Object.assign(server, { token: rawServer.token })
@@ -229,10 +232,10 @@ export class ScreepsConfigManager {
   }
 
   normalizeClientConfig(
-    parsed: JsonConfig | YamlConfig,
-    clientOpts?: string | Partial<ClientConfig>
-  ): AppConfig {
-    const client: AppConfig = { ...DEFAULT_CLIENT_CONFIG }
+    parsed: ScreepsJsonConfig | ScreepsYamlConfig,
+    clientOpts?: string | Partial<ScreepsClientConfig>
+  ): ScreepsAppConfig {
+    const client: ScreepsAppConfig = { ...DEFAULT_CLIENT_CONFIG }
     if (!clientOpts) {
       return client
     }
@@ -244,7 +247,7 @@ export class ScreepsConfigManager {
 
     if (typeof clientOpts === 'string') {
       const appName = clientOpts
-      const appConfigs = (parsed as YamlConfig).configs
+      const appConfigs = (parsed as ScreepsYamlConfig).configs
       const appConfig = appConfigs?.[appName]
 
       if (typeof appConfig !== 'object') {
@@ -262,20 +265,20 @@ export class ScreepsConfigManager {
 }
 
 /** Configuration and options for {@link ScreepsHttpClient} */
-export interface Config {
-  /** @see {@link AppConfig} */
-  client: AppConfig
+export interface ScreepsHttpConfig {
+  /** @see {@link ScreepsAppConfig} */
+  client: ScreepsAppConfig
   /**
    * Configuration for the Screeps World server to which this client
    * should connect
    */
-  server: Readonly<ServerConfig>
+  server: Readonly<ScreepsServerConfig>
   /**
    * The config file parsed (but not normalized) by {@link ScreepsConfigManager}.
    * Apps can use this to determine which other server names and client
    * configs are available.
    */
-  parsed?: JsonConfig | YamlConfig
+  parsed?: ScreepsJsonConfig | ScreepsYamlConfig
 }
 
 /** Options used by {@link ScreepsConfigManager.loadConfig} */
@@ -287,17 +290,17 @@ export interface LoadConfigOptions {
   file?: string
   /**
    * If this is a string and a YAML credential file is used,
-   * {@link ClientConfig} will be pulled from the `configs[client]` key
+   * {@link ScreepsClientConfig} will be pulled from the `configs[client]` key
    * in that file.
    */
-  client?: string | Partial<AppConfig>
+  client?: string | Partial<ScreepsAppConfig>
 }
 
 /**
  * Normalized configuration for a single Screeps World server
- * @see {@link RawServerConfig} for the pre-normalized schema
+ * @see {@link ScreepsRawServerConfig} for the pre-normalized schema
  */
-export interface ServerConfig {
+export interface ScreepsServerConfig {
   url: string
   token?: string
   email?: string
@@ -308,7 +311,7 @@ export interface ServerConfig {
  * User-configurable options for {@link ScreepsHttpClient}
  * @see {@link DEFAULT_CLIENT_CONFIG} for default values
  */
-export interface ClientConfig {
+export interface ScreepsClientConfig {
   /**
    * Specifies a default shard name to use when one is not provided
    * as an argument to a {@link ScreepsHttpClient} endpoint function.
@@ -338,13 +341,13 @@ export interface ClientConfig {
 }
 
 /**
- * An extension of {@link ClientConfig} that may contain properties
+ * An extension of {@link ScreepsClientConfig} that may contain properties
  * intended for the app using {@link ScreepsHttpClient}.
  */
-export type AppConfig = ClientConfig & { [propertyName: string]: unknown }
+export type ScreepsAppConfig = ScreepsClientConfig & { [propertyName: string]: unknown }
 
-/** Server configuration schema from {@link JsonConfig}/{@link YamlConfig} */
-export interface RawServerConfig {
+/** Server configuration schema from {@link ScreepsJsonConfig}/{@link ScreepsYamlConfig} */
+export interface ScreepsRawServerConfig {
   token?: string
   email?: string
   username?: string
@@ -365,15 +368,15 @@ export interface RawServerConfig {
  * Format of a Screeps Unified Credentials File:
  * https://github.com/screepers/screepers-standards/blob/3877e86f38caed9891ef6270aa9690df556e6c22/SS3-Unified_Credentials_File.md
  */
-export interface YamlConfig {
-  servers: { [serverName: string]: RawServerConfig | undefined }
-  configs?: { [appName: string]: ClientConfig | undefined }
+export interface ScreepsYamlConfig {
+  servers: { [serverName: string]: ScreepsRawServerConfig | undefined }
+  configs?: { [appName: string]: ScreepsClientConfig | undefined }
 }
 
 /**
  * Format of a Screeps JSON credentials file:
  * https://github.com/screepers/screeps-typescript-starter/blob/master/screeps.sample.json
  */
-export interface JsonConfig {
-  [serverName: string]: RawServerConfig | undefined
+export interface ScreepsJsonConfig {
+  [serverName: string]: ScreepsRawServerConfig | undefined
 }

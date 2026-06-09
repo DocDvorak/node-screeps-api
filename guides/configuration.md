@@ -96,7 +96,7 @@ configs:
 
 Configuration data can be passed to the client in a number of different ways.
 
-One approach is {@link ScreepsHttpClient#constructor | `new ScreepsHttpClient()`}:
+One approach is {@link ScreepsHttpClient | `new ScreepsHttpClient()`}:
 
 ```ts
 import { ScreepsConfigManager, ScreepsHttpClient } from 'screeps-api'
@@ -187,4 +187,4 @@ await api.socket.connect({
 })
 ```
 
-See {@link SocketClientOptions} for a full list of options.
+See {@link ScreepsSocketConfig} for a full list of options.

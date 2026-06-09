@@ -1,5 +1,5 @@
-import { Api } from './Api'
 import Debug from 'debug'
+import { ScreepsHttpMethod } from './http'
 
 const debugRateLimit = Debug('screepsapi:ratelimit')
 
@@ -71,11 +71,11 @@ export class RateLimitTracker {
     }
   }
 
-  find(method: Api.HttpMethod, path: string): RateLimit {
+  find(method: ScreepsHttpMethod, path: string): RateLimit {
     return this[method][path] ?? this.global
   }
 
-  update(method: Api.HttpMethod, path: string, latest: RateLimitUpdate): RateLimit {
+  update(method: ScreepsHttpMethod, path: string, latest: RateLimitUpdate): RateLimit {
     const limit = this.find(method, path)
     limit.remaining = latest.remaining
     limit.reset = latest.reset
@@ -86,7 +86,7 @@ export class RateLimitTracker {
     return limit
   }
 
-  describe(method: Api.HttpMethod, path: string, limit: RateLimit): string {
+  describe(method: ScreepsHttpMethod, path: string, limit: RateLimit): string {
     const label = limit === this.global ? 'global' : `${method} ${path}`
     return `${label} remaining=${limit.remaining}/${limit.limit} reset=${limit.toReset}ms`
   }

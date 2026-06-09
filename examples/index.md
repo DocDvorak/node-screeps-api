@@ -9,7 +9,7 @@ children:
 ---
 **Warning:** These examples may be outdated and plain broken.
 
-If you've cloned this repository and installed the dev dependencies, you can run these demos from the command line using `tsx`:
+If you've cloned this repository and installed the dev dependencies, you can run these demo scripts from the command line using `tsx`:
 ```sh
 yarn exec tsx examples/example-script-name.ts
 ```

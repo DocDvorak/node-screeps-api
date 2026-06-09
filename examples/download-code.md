@@ -3,8 +3,8 @@ title: Monitor Code Changes
 group: Examples
 category:
 - Code
-- Socket API
+- WebSocket API
 ---
-This example uses the Socket API to monitor changes to the user's code.
+This example uses the WebSocket API to monitor changes to the user's code.
 
 {@includeCode download-code.ts}

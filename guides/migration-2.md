@@ -4,25 +4,25 @@ group: Guides
 category:
 - Configuration
 - HTTP API
-- Socket API
+- WebSocket API
 ---
 This guide provides an overview of how to migrate your application to `node-screeps-api` v2 from v1.
 
 ## Compatibility
 
-Since "Screeps: World" was [upgraded to Node.js v24](https://store.steampowered.com/news/app/464350/view/553521213220061691?l=english), `node-screeps-api` v2 also targets Node.js v24. It may work with older node versions, but this is not explicitly supported.
+Since "Screeps: World" was [upgraded to Node.js v24](https://store.steampowered.com/news/app/464350/view/494970521254890068), `node-screeps-api` v2 also targets Node.js v24. It may work with older node versions, but this is not explicitly supported.
 
-This package is now bundled using the [ESM format](https://nodejs.org/docs/latest-v24.x/api/esm.html#modules-ecmascript-modules). If your application is still using CJS, you will need to upgrade to ESM as well.
+This package is now bundled using the [ESM format](https://nodejs.org/docs/latest-v24.x/api/esm.html#modules-ecmascript-modules). If your application is still using CJS, you will need to upgrade to ESM.
 
 ## Configuration
 
-`ConfigManager` has been renamed to {@link ScreepsConfigManager | `ScreepsConfigManager`}, and it is now publicly exported.
+`ConfigManager` has been renamed to {@link ScreepsConfigManager}, and it is now publicly exported.
 
-[`screeps.json`](https://github.com/screepers/screeps-typescript-starter/blob/master/screeps.sample.json) credentials files are now supported in addition to the original [SS3 (Screeps Unified Credentials File)](https://github.com/screepers/screepers-standards/blob/3877e86f38caed9891ef6270aa9690df556e6c22/SS3-Unified_Credentials_File.md) format.
+[screeps.json](https://github.com/screepers/screeps-typescript-starter/blob/master/screeps.sample.json) credentials files are now supported in addition to the original [SS3 (Screeps Unified Credentials File)](https://github.com/screepers/screepers-standards/blob/3877e86f38caed9891ef6270aa9690df556e6c22/SS3-Unified_Credentials_File.md) format.
 
 ## HTTP API
 
-`ScreepsAPI` has been renamed to {@link ScreepsHttpClient | `ScreepsHttpClient`}.
+`ScreepsAPI` has been renamed to {@link ScreepsHttpClient | ScreepsHttpClient}.
 
 The signature of {@link ScreepsHttpClient.fromConfig | `ScreepsHttpClient.fromConfig()`} has been changed:
 ```ts
@@ -48,7 +48,7 @@ const apiEx3 = await ScreepsHttpClient.fromConfig('main', {
 })
 ```
 
-In v1, `ScreepsAPI` grouped its endpoint methods into objects. In v2, all methods are defined directly on {@link ScreepsHttpClient | `ScreepsHttpClient`}:
+In v1, `ScreepsAPI` grouped its endpoint methods into objects. In v2, all methods are defined directly on {@link ScreepsHttpClient}:
 ```ts
 // Old:
 const api = await ScreepsAPI.fromConfig('main', 'myApp')
@@ -69,6 +69,6 @@ const terrain = await api.userMemorySegmentGet('1,5,10', 'shard2')
 const messages = await api.userMessagesIndex()
 ```
 
-## Socket API
+## WebSocket API
 
-The {@link ScreepsSocketClient | Socket API client} is largely unchanged. Check out the [examples](../examples/index.md).
+The {@link ScreepsSocketClient | WebSocket API client} is largely unchanged. Check out the [examples](../examples/index.md).

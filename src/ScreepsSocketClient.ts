@@ -6,7 +6,7 @@ import utils from 'node:util'
 import WebSocket from 'ws'
 import zlib from 'zlib'
 import { ScreepsHttpClient } from './ScreepsHttpClient'
-import { AuthEvent } from './SocketEvent'
+import { ServerAuthEvent, ServerAuthStatus, SocketEvent } from './socket'
 
 const debug = Debug('screepsapi:socket')
 
@@ -15,9 +15,9 @@ const inflateAsync = utils.promisify(zlib.inflate)
 /**
  * Configuration options for {@link ScreepsSocketClient}.
  * These are provided when calling {@link ScreepsSocketClient.connect}.
- * @see {@link SOCKET_CLIENT_DEFAULTS} for default values
+ * @see {@link DEFAULT_SOCKET_CONFIG} for default values
  */
-export interface SocketClientOptions {
+export interface ScreepsSocketConfig {
   /**
    * If enabled, {@link ScreepsSocketClient} will call {@link reconnect} automatically
    * when disconnected.
@@ -47,24 +47,24 @@ export interface SocketClientOptions {
   maxRetryDelay: number
 }
 
-/** Default {@link SocketClientOptions} used by {@link ScreepsSocketClient.connect} */
-export const SOCKET_CLIENT_DEFAULTS: Readonly<SocketClientOptions> = {
+/** Default {@link ScreepsSocketConfig} used by {@link ScreepsSocketClient.connect} */
+export const DEFAULT_SOCKET_CONFIG = {
   reconnect: true,
   resubscribe: true,
   keepAlive: true,
   keepAliveInterval: 10_000, // 10 seconds
   maxRetries: 10,
   maxRetryDelay: 60_000 // 1 minute
-}
+} as const
 
 /**
  * Provides access to the Screeps WebSocket API.
- * @document ../guides/websocket-endpoints.md
+ * @document ../guides/websocket.md
  * @see {@link ScreepsHttpClient} for the HTTP API client
  */
 export class ScreepsSocketClient extends EventEmitter {
   api: ScreepsHttpClient
-  opts: SocketClientOptions
+  opts: ScreepsSocketConfig
   ws?: WebSocket
   authed = false
   connected = false
@@ -96,11 +96,11 @@ export class ScreepsSocketClient extends EventEmitter {
   constructor(api: ScreepsHttpClient) {
     super()
     this.api = api
-    this.opts = Object.assign({}, SOCKET_CLIENT_DEFAULTS)
+    this.opts = Object.assign({}, DEFAULT_SOCKET_CONFIG)
     this.on('error', console.error)
     this.reset()
-    this.on('auth', (ev: AuthEvent) => {
-      if (ev.data.status === 'ok') {
+    this.on('auth', (ev: ServerAuthEvent) => {
+      if (ev.data.status === ServerAuthStatus.OK) {
         while (this.__queue.length) {
           this.emit(this.__queue.shift()! as string)
         }
@@ -128,10 +128,10 @@ export class ScreepsSocketClient extends EventEmitter {
    * Connect to the server and immediately attempt to authenticate.
    *
    * If successful, any queued messages will be sent automatically.
-   * @param opts WebSocket API client options. See {@link SocketClientOptions}.
+   * @param opts WebSocket API client options. See {@link ScreepsSocketConfig}.
    * @throws {Error} if an API token is not available due to missing auth credentials
    */
-  async connect(opts?: Partial<SocketClientOptions>) {
+  async connect(opts?: Partial<ScreepsSocketConfig>) {
     Object.assign(this.opts, opts ?? {})
     if (!this.api.token) {
       await this.api.auth(
@@ -183,9 +183,9 @@ export class ScreepsSocketClient extends EventEmitter {
    * Reconnect to the server using current client settings.
    *
    * Upon success, all previous subscriptions will be reestablished
-   * (if {@link SocketClientOptions.resubscribe} is enabled).
+   * (if {@link ScreepsSocketConfig.resubscribe} is enabled).
    *
-   * Up to {@link SocketClientOptions.maxRetries} connections will be attempted
+   * Up to {@link ScreepsSocketConfig.maxRetries} connections will be attempted
    * with exponential backoff.
    * @throws {Error} if the maximum number of retry attempts is exceeded
    */
@@ -256,9 +256,9 @@ export class ScreepsSocketClient extends EventEmitter {
       const msgData = JSON.parse(msg) as [string, unknown]
       const [, type, id, path = ''] = /^(.+):(.+?)(?:\/(.+))?$/.exec(msgData[0])!
       const event = {
-        path,
-        id,
         type,
+        id,
+        path,
         data: msgData[1]
       }
       this.emit(msgData[0], event)
@@ -328,9 +328,9 @@ export class ScreepsSocketClient extends EventEmitter {
   private async auth(token: string) {
     return await new Promise<void>((resolve, reject) => {
       this.send(`auth ${token}`)
-      this.once('auth', (event: AuthEvent) => {
+      this.once('auth', (event: ServerAuthEvent) => {
         const { data } = event
-        if (data.status === 'ok') {
+        if (data.status === ServerAuthStatus.OK) {
           this.authed = true
           this.emit('token', data.token)
           this.emit('authed')
@@ -339,7 +339,7 @@ export class ScreepsSocketClient extends EventEmitter {
           }
           resolve()
         } else {
-          reject(new Error('Socket API authentication failed'))
+          reject(new Error('WebSocket API authentication failed'))
         }
       })
     })
@@ -352,8 +352,8 @@ export class ScreepsSocketClient extends EventEmitter {
    *  This can be left undefined to resubscribe to an event using a
    *  previously-registered callback.
    */
-  // TODO: Add overloads with stronger cb type restrictions for known path types
-  async subscribe(event: string, cb?: (...args: unknown[]) => void) {
+  // TODO: Add overloads with stronger cb type restrictions for known event type/path combos
+  async subscribe<E extends SocketEvent>(event: string, cb?: (event: E) => void) {
     if (!event) return
     const userID = (await this.api.me())._id
     if (!(/^(\w+):(.+?)$/.exec(event))) {
@@ -375,7 +375,8 @@ export class ScreepsSocketClient extends EventEmitter {
    * @param event The name of the event (ex: 'console', 'room:ROOM_NAME')
    * @param cb The callback to unsubscribe.
    */
-  async unsubscribe(event: string, cb?: (...args: unknown[]) => void) {
+  // TODO: Add overloads with stronger cb type restrictions for known event type/path combos
+  async unsubscribe<E extends SocketEvent>(event: string, cb?: (event: E) => void) {
     if (!event) return
     const userID = (await this.api.me())._id
     if (!(/^(\w+):(.+?)$/.exec(event))) {

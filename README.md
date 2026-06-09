@@ -54,7 +54,7 @@ api.userCodeSet({
   }
 })
 
-// Socket API
+// WebSocket API
 
 api.socket.connect()
 // Events have the structure of:
@@ -103,7 +103,7 @@ api.socket.subscribe('memory/rooms.E0N0', (event) => {
 
 As of v1.7, a small CLI program (`screeps-api`) is included.
 
-Server/auth credentials are located using `ScreepsConfigManager.
+Server/auth credentials are located using `ScreepsConfigManager.loadConfig()`.
 
 ```
 $ screeps-api
@@ -129,7 +129,3 @@ Check the [docs](https://screepers.github.io/node-screeps-api/) for a detailed l
 * WebSocket API: [`ScreepsSocketClient`](https://screepers.github.io/node-screeps-api/docs/classes/index.ScreepsSocketClient.html) for web socket endpoints
 
 Please note that the listed endpoints and WebSocket events are not exhaustive.
-
-## Authentication
-
-As of 12/29/2017, Screeps now uses auth tokens obtained via your [account settings page](https://screeps.com/a/#!/account). User/pass auth will stop working on February 1, 2018 ([announcement](http://blog.screeps.com/2017/12/auth-tokens/))!

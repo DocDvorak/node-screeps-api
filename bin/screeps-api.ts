@@ -3,8 +3,8 @@ import { Command } from 'commander'
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { Api } from '../src/Api'
 import { ScreepsHttpClient } from '../src'
+import { UserCodeSetRequest } from './http'
 
 interface CommandOptions {
   server?: string
@@ -209,7 +209,7 @@ commandBase('upload', '<files...>')
   .option('-b --branch <branch>', 'Code branch', 'default')
   .action(async function (files: string[], opts: UploadOptions) {
     const api = await init(opts)
-    const modules: Api.UserCodeSetRequest['modules'] = {}
+    const modules: UserCodeSetRequest['modules'] = {}
     const ps = []
     for (const file of files) {
       ps.push((async (file) => {

@@ -4,7 +4,7 @@ group: Guides
 category:
 - Configuration
 - HTTP API
-- Socket API
+- WebSocket API
 ---
 ## Event Logging
 
@@ -13,7 +13,7 @@ category:
 * `screepsapi:http`: HTTP requests
 * `screepsapi.ratelimit`: HTTP API rate limit state
 * `screepsapi.ratelimitexceeded`: HTTP API endpoint rate limit exceeded events
-* `screepsapi.socket`: Socket API events/messages
+* `screepsapi.socket`: WebSocket API events/messages
 
 Multiple namespaces can be specified by providing a comma-delimited list (ex: `screepsapi:http,screepsapi:ratelimit`). All namespaces can be specified by providing `screepsapi:*`.
 

@@ -5,14 +5,16 @@ import { EventEmitter } from 'node:events'
 import { setTimeout } from 'node:timers/promises'
 import utils from 'node:util'
 import zlib from 'zlib'
-import { Api, FlagColor } from './Api'
-import { ClientConfig, Config, DEFAULT_CLIENT_CONFIG, LoadConfigOptions, RawServerConfig, ScreepsConfigManager, ServerConfig } from './ScreepsConfigManager'
-import { ScreepsSocketClient } from './ScreepsSocketClient'
 import { RateLimit, RateLimitTracker } from './RateLimitTracker'
+import { DEFAULT_CLIENT_CONFIG, LoadConfigOptions, ScreepsClientConfig, ScreepsConfigManager, ScreepsHttpConfig, ScreepsRawServerConfig, ScreepsServerConfig } from './ScreepsConfigManager'
+import { ScreepsSocketClient } from './ScreepsSocketClient'
+import { BuildableStructureConstant, CpuShardLimits, FlagColor, MarketResourceConstant, RoomStat, RoomStatInterval, UserBadge, UserCodeModules } from './common'
+import * as Http from './http'
+import { ScreepsHttpMethod } from './http'
 
 /** Fired when rate limit state is updated */
 export interface RateLimitEvent extends RateLimit {
-  method: Api.HttpMethod
+  method: ScreepsHttpMethod
   path: string
 }
 
@@ -47,7 +49,7 @@ export const OFFICIAL_HISTORY_INTERVAL = 100
 export const PRIVATE_HISTORY_INTERVAL = 20
 
 /**
- * Provides access to the Screeps HTTP API.
+ * Provides access to the Screeps HTTP Http.
  *
  * Please note that the Screeps HTTP API is not technically a public API; it
  * merely exists to power the game's official Steam and web clients.
@@ -76,62 +78,73 @@ export const PRIVATE_HISTORY_INTERVAL = 20
  * @see {@link ScreepsSocketClient} for the WebSocket API client (accessible via {@link ScreepsHttpClient.socket})
  * @example
  * // To access the `GET /api/auth/me` endpoint:
- * const me = await api.authMe()
+ * const me = await Http.authMe()
  * @document ../guides/rate-limits.md
  * @showCategories
- * @categoryDescription Endpoint Methods: /
+ * @categoryDescription Endpoints: /
  * Top-level API endpoints
- * @categoryDescription Endpoint Methods: /auth
+ * @categoryDescription Endpoints: /auth
  * Endpoints for authenticating to the server or checking authentication status
- * @categoryDescription Endpoint Methods: /
- * @categoryDescription Endpoint Methods: /experimental
+ * @categoryDescription Endpoints: /
+ * @categoryDescription Endpoints: /experimental
  * Endpoints that are not yet considered stable. Their request parameters
  * and response formats are subject to change without warning (even more so than
  * the rest of the API), and they may not be available on all servers.
  *
  * Currently, all endpoints in this category are used to query for
  * current/recent PVP activity.
- * @see {@link warpath} for similar endpoints
- * @categoryDescription Endpoint Methods: /game
+ *
+ * See the `Endpoints: /warpath` category for similar endpoints
+ * @categoryDescription Endpoints: /game
  * Endpoints used to read or modify game state
- * @categoryDescription Endpoint Methods: /game/market
+ * @categoryDescription Endpoints: /game/market
  * Endpoints for reading or modifying the state of the
  * {@link https://docs.screeps.com/market.html | in-game market}
- * @categoryDescription Endpoint Methods: /leaderboard
+ * @categoryDescription Endpoints: /leaderboard
  * Endpoints for querying control/power leaderboards
- * @see {@link scoreboard} for seasonal world competition leaderboards
- * @categoryDescription Endpoint Methods: /register
+ *
+ * See the `Endpoints: /scoreboard` category for seasonal world competition leaderboards
+ * @categoryDescription Endpoints: /register
  * Endpoints for creating new user accounts
- * @categoryDescription Endpoint Methods: /scoreboard
+ * @categoryDescription Endpoints: /scoreboard
  * Endpoints for querying scoreboard results
- * @categoryDescription Endpoint Methods: /seasons
+ *
+ * This appears to only be relevant to
+ * {@link https://screeps.com/season/#!/seasons/chronicle | seasonal world}
+ * competitions/events.
+ *
+ * See also:
+ * - `Endpoints: /seasons` category: seasonal world metadata endpoints
+ * - `Endpoints: /leaderboard` category: for non-seasonal leaderboard endpoints
+ * @categoryDescription Endpoints: /seasons
  * Endpoints for {@link https://screeps.com/season/#!/seasons/chronicle | seasonal world} events.
- * @see {@link scoreboard} for seasonal world scoreboard endpoints
- * @categoryDescription Endpoint Methods: /servers
+ * See the `Endpoints: /scoreboard` category for seasonal world scoreboard endpoints
+ * @categoryDescription Endpoints: /servers
  * Endpoints that provide information about other servers
- * @categoryDescription Endpoint Methods: /user
+ * @categoryDescription Endpoints: /user
  * Endpoints for reading or modifying state about the authenticated user,
  * or for looking up information on other users
- * @categoryDescription Endpoint Methods: /user/code
+ * @categoryDescription Endpoints: /user/code
  * Endpoints for downloading or uploading code
- * @categoryDescription Endpoint Methods: /user/decorations
- * Endpoints for managing {@link Api['Decorations']['Instance'] | decorations}
- * @categoryDescription Endpoint Methods: /user/memory
+ * @categoryDescription Endpoints: /user/decorations
+ * Endpoints for managing {@link DecorationInstance | decorations}
+ * @categoryDescription Endpoints: /user/memory
  * Endpoints for reading from or writing to
  * {@link https://docs.screeps.com/global-objects.html#Memory-object | Memory}.
- * @categoryDescription Endpoint Methods: /user/memory/segment
+ * @categoryDescription Endpoints: /user/memory/segment
  * Endpoints for reading from or writing to
  * {@link https://docs.screeps.com/api/#RawMemory.segments | RawMemory.segments}.
- * @categoryDescription Endpoint Methods: /user/messages
+ * @categoryDescription Endpoints: /user/messages
  * Endpoints for reading or managing in-game messages
- * @categoryDescription Endpoint Methods: /warpath
+ * @categoryDescription Endpoints: /warpath
  * Endpoints for querying current/recent PVP activity by room.
  *
  * These may not be implemented on all servers. Most notably, they are not
  * available on official servers, but the third-party service
  * {@link https://voight-kampff.fly.dev/ | Voight-Kampff} provides these
  * and more for official servers and popular community servers.
- * @see {@link experimental} for similar endpoints
+ *
+ * See the `Endpoints: /experimental` category for similar endpoints
  */
 export class ScreepsHttpClient extends EventEmitter {
   /**
@@ -153,7 +166,7 @@ export class ScreepsHttpClient extends EventEmitter {
   static readonly RATE_LIMIT = 'rateLimit'
 
   /**
-   * Fired when a response is received from the API.
+   * Fired when a response is received from the Http.
    *
    * Payload:
    * @event {@link AxiosResponse} The HTTP response
@@ -197,7 +210,7 @@ export class ScreepsHttpClient extends EventEmitter {
     return api
   }
 
-  appConfig: ClientConfig
+  appConfig: ScreepsClientConfig
   readonly rateLimits: RateLimitTracker
   readonly socket: ScreepsSocketClient
 
@@ -206,7 +219,7 @@ export class ScreepsHttpClient extends EventEmitter {
    *
    * Use {@link setServer} to switch servers.
    */
-  get server(): Readonly<ServerConfig> {
+  get server(): Readonly<ScreepsServerConfig> {
     return this._server
   }
 
@@ -220,14 +233,14 @@ export class ScreepsHttpClient extends EventEmitter {
 
   private _authed = false
   private _http: AxiosInstance
-  private _server: ServerConfig
+  private _server: ScreepsServerConfig
   private _token?: string
-  private _tokenInfo?: Api.TokenInfo
-  private _user?: Api.AuthMeResponse | Api.UserFindResponse['user']
+  private _tokenInfo?: Http.AuthQueryTokenResult
+  private _user?: Http.AuthMeResponse | Http.UserInfo
 
-  constructor(config: Config)
-  constructor(serverConfig: ServerConfig | RawServerConfig)
-  constructor(config: Config | ServerConfig | RawServerConfig) {
+  constructor(config: ScreepsHttpConfig)
+  constructor(serverConfig: ScreepsServerConfig | ScreepsRawServerConfig)
+  constructor(config: ScreepsHttpConfig | ScreepsServerConfig | ScreepsRawServerConfig) {
     super()
 
     if (!('server' in config) || !('client' in config)) {
@@ -254,10 +267,10 @@ export class ScreepsHttpClient extends EventEmitter {
    * This endpoint does not require authentication.
    *
    * Endpoint: `GET /api/version`
-   * @category Endpoint Methods: /
+   * @category Endpoints: /
    */
-  version(): Promise<Api.VersionResponse> {
-    return this.req('GET', '/api/version')
+  version(): Promise<Http.ScreepsVersionResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/version')
   }
 
   /**
@@ -268,13 +281,13 @@ export class ScreepsHttpClient extends EventEmitter {
    * This endpoint does not require authentication.
    *
    * Endpoint: `GET /api/authmod`
-   * @category Endpoint Methods: /
+   * @category Endpoints: /
    */
-  authmod(): Promise<Api.AuthModResponse> {
+  authmod(): Promise<Http.ScreepsAuthModResponse> {
     if (this.isOfficialServer) {
       return Promise.resolve({ ok: 1, name: 'official' })
     }
-    return this.req('GET', '/api/authmod')
+    return this.req(ScreepsHttpMethod.GET, '/api/authmod')
   }
 
   /**
@@ -285,26 +298,26 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param room Name of the room for which to fetch history
    * @param tick Tick for which history should be fetched
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
    * @throws {ScreepsApiError} if history is unsupported or the requested chunk is missing
    * - HTTP 500: this is an unofficial server that does not record room history
    * - HTTP 404: the requested history chunk does not exist
    * @see {@link version} returns the history chunk size to expect
-   * @category Endpoint Methods: /
+   * @category Endpoints: /
    */
-  history(room: string, tick: number, shard?: string): Promise<Api.RoomHistoryResponse> {
+  history(room: string, tick: number, shard?: string): Promise<Http.ScreepsRoomHistoryResponse> {
     if (this.isOfficialServer) {
       shard ??= this.appConfig.defaultShard
       if (shard === undefined) {
         throw new Error('shard must be defined')
       }
       tick -= tick % OFFICIAL_HISTORY_INTERVAL
-      return this.req('GET', `/room-history/${shard}/${room}/${tick}.json`)
+      return this.req(ScreepsHttpMethod.GET, `/room-history/${shard}/${room}/${tick}.json`)
     } else {
       tick -= tick % PRIVATE_HISTORY_INTERVAL
-      return this.req('GET', '/room-history', { room, time: tick })
+      return this.req(ScreepsHttpMethod.GET, '/room-history', { room, time: tick })
     }
   }
 
@@ -316,10 +329,10 @@ export class ScreepsHttpClient extends EventEmitter {
    *
    * Endpoint: `POST /api/servers/list`
    * @throws {Error} HTTP 404 if used on an unofficial server
-   * @category Endpoint Methods: /servers
+   * @category Endpoints: /servers
    */
-  serversList(): Promise<Api.ServerListResponse> {
-    return this.req('POST', '/api/servers/list')
+  serversList(): Promise<Http.ServerListResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/servers/list')
   }
 
   /**
@@ -331,10 +344,10 @@ export class ScreepsHttpClient extends EventEmitter {
    * Endpoint: `POST /api/auth/signin`
    * @param email The email address used for registration
    * @param password The password used for registration
-   * @category Endpoint Methods: /auth
+   * @category Endpoints: /auth
    */
-  authSignin(email: string, password: string): Promise<Api.AuthSigninResponse> {
-    return this.req('POST', '/api/auth/signin', { email, password })
+  authSignin(email: string, password: string): Promise<Http.AuthSigninResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/auth/signin', { email, password })
   }
 
   /**
@@ -346,20 +359,20 @@ export class ScreepsHttpClient extends EventEmitter {
    * Endpoint: `POST /api/auth/steam-ticket`
    * @param ticket Do you know what this does? If so, please submit a PR!
    * @param useNativeAuth Do you know what this does? If so, please submit a PR!
-   * @category Endpoint Methods: /auth
+   * @category Endpoints: /auth
    */
-  authSteamTicket(ticket: unknown, useNativeAuth = false): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/auth/steam-ticket', { ticket, useNativeAuth })
+  authSteamTicket(ticket: unknown, useNativeAuth = false): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/auth/steam-ticket', { ticket, useNativeAuth })
   }
 
   /**
    * Fetch information about the authenticated user.
    *
    * Endpoint: `GET /api/auth/me`
-   * @category Endpoint Methods: /auth
+   * @category Endpoints: /auth
    */
-  authMe(): Promise<Api.AuthMeResponse> {
-    return this.req('GET', '/api/auth/me')
+  authMe(): Promise<Http.AuthMeResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/auth/me')
   }
 
   /**
@@ -369,10 +382,10 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param token The API token for which permissions should be queried
    * @throws {Error} if the token is invalid / not recognized.
    * @see {@link ScreepsHttpClient.token} for the API token currently in use by this client
-   * @category Endpoint Methods: /auth
+   * @category Endpoints: /auth
    */
-  authQueryToken(token: string): Promise<Api.AuthQueryTokenResponse> {
-    return this.req('GET', '/api/auth/query-token', { token })
+  authQueryToken(token: string): Promise<Http.AuthQueryTokenResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/auth/query-token', { token })
   }
 
   /**
@@ -382,13 +395,13 @@ export class ScreepsHttpClient extends EventEmitter {
    *
    * Endpoint: `GET /api/register/check-email`
    * @param email The email address to check
-   * @returns If the exmail is available, returns {@link Api.Response}.
-   *  If the email is taken, returns {@link Api.ErrorResponse}
+   * @returns If the exmail is available, returns {@link Http.ScreepsResponse}.
+   *  If the email is taken, returns {@link Http.ScreepsErrorResponse}
    *  (`{ error: 'exists' }`).
-   * @category Endpoint Methods: /register
+   * @category Endpoints: /register
    */
-  registerCheckEmail(email: string): Promise<Api.Response | Api.ErrorResponse> {
-    return this.req('GET', '/api/register/check-email', { email })
+  registerCheckEmail(email: string): Promise<Http.ScreepsResponse | Http.ScreepsErrorResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/register/check-email', { email })
   }
 
   /**
@@ -398,13 +411,13 @@ export class ScreepsHttpClient extends EventEmitter {
    *
    * Endpoint: `GET /api/register/check-username`
    * @param username The username to check
-   * @returns If the username is available, returns {@link Api.Response}.
-   *  If the username is taken, returns {@link Api.ErrorResponse}
+   * @returns If the username is available, returns {@link Http.ScreepsResponse}.
+   *  If the username is taken, returns {@link Http.ScreepsErrorResponse}
    *  (`{ error: 'exists' }`).
-   * @category Endpoint Methods: /register
+   * @category Endpoints: /register
    */
-  registerCheckUsername(username: string): Promise<Api.Response | Api.ErrorResponse> {
-    return this.req('GET', '/api/register/check-username', { username })
+  registerCheckUsername(username: string): Promise<Http.ScreepsResponse | Http.ScreepsErrorResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/register/check-username', { username })
   }
 
   /**
@@ -412,11 +425,11 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param username The username to associated with this account
    * @returns Please consider submitting a PR to document the success response.
    *  If used for an account that is already set up, returns
-   *  {@link Api.ErrorResponse} (`{ error: 'username already set' }`).
-   * @category Endpoint Methods: /register
+   *  {@link Http.ScreepsErrorResponse} (`{ error: 'username already set' }`).
+   * @category Endpoints: /register
    */
-  registerSetUsername(username: string): Promise<Api.UnknownResponse | Api.ErrorResponse> {
-    return this.req('POST', '/api/register/set-username', { username })
+  registerSetUsername(username: string): Promise<Http.ScreepsUnknownResponse | Http.ScreepsErrorResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/register/set-username', { username })
   }
 
   /**
@@ -428,15 +441,15 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param password The password to use for this new account.
    *  It is unclear whether or not this is accepted or even allowed on official servers.
    * @param modules Initial bot code to deploy for this user
-   * @category Endpoint Methods: /register
+   * @category Endpoints: /register
    */
   registerSubmit(
     username: string,
     email: string,
     password: string,
-    modules?: Api.UserCodeModules
-  ): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/register/submit', { username, email, password, modules })
+    modules?: UserCodeModules
+  ): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/register/submit', { username, email, password, modules })
   }
 
   /**
@@ -445,23 +458,23 @@ export class ScreepsHttpClient extends EventEmitter {
    *
    * Endpoint: `POST /api/game/map-stats`
    * @param rooms An array of one or more room names.
-   * @param statName The type of stat to fetch. See {@link Api.MapStat}.
+   * @param statName The type of stat to fetch. See {@link Http.MapStat}.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameMapStats<S extends Api.MapStat>(
+  gameMapStats<S extends Http.MapOrRoomStat>(
     rooms: string[],
     statName: S,
     shard?: string
-  ): Promise<Api.GameMapStatsResponse<S>> {
+  ): Promise<Http.GameMapStatsResponse<S>> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/map-stats', { rooms, statName, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/map-stats', { rooms, statName, shard })
   }
 
   /**
@@ -473,17 +486,17 @@ export class ScreepsHttpClient extends EventEmitter {
    * Endpoint: `POST /api/game/gen-unique-object-name`
    * @param type The type of object for which to generate the name (ex: "flag" or "spawn")
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameGenUniqueObjectName(type: string, shard?: string): Promise<Api.GameGenUniqueNameResponse> {
+  gameGenUniqueObjectName(type: string, shard?: string): Promise<Http.GameGenUniqueNameResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/gen-unique-object-name', { type, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/gen-unique-object-name', { type, shard })
   }
 
   /**
@@ -495,25 +508,25 @@ export class ScreepsHttpClient extends EventEmitter {
    *  `'flag'` and `'creep'` will cause an error.
    * @param name The name to check
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server.
    *  Also throws an error if the object name is already in use.
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameCheckUniqueObjectName(type: string, name: string, shard?: string): Promise<Api.Response> {
+  gameCheckUniqueObjectName(type: string, name: string, shard?: string): Promise<Http.ScreepsResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/check-unique-object-name', { type, name, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/check-unique-object-name', { type, name, shard })
   }
 
   /**
-   * Place the authenticated user's first {@link Api.StructureSpawn | spawn} structure.
+   * Place the authenticated user's first {@link StructureSpawn | spawn} structure.
    *
    * This operation is only permitted when the user's
-   * {@link Api.UserWorldStatusResponse.status | world status}
+   * {@link Http.UserWorldStatusResponse.status | world status}
    * is equal to `'empty'`.
    *
    * Endpoint: `POST /api/game/place-spawn`
@@ -522,17 +535,17 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param y Y-coordinate of the spawn's room position
    * @param name An optional name to assign to the placed spawn
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gamePlaceSpawn(room: string, x: number, y: number, name?: string, shard?: string): Promise<Api.UnknownResponse> {
+  gamePlaceSpawn(room: string, x: number, y: number, name?: string, shard?: string): Promise<Http.ScreepsUnknownResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/place-spawn', { name, room, x, y, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/place-spawn', { name, room, x, y, shard })
   }
 
   /**
@@ -550,13 +563,13 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param color The color of the left side of the flag
    * @param secondaryColor The color of the right side of the flag
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
    * @returns A generic MongoDB upsert response:
    * - If the name is new, `result.upserted[0]._id` is the game id of the created flag
    * - If not, this moves the flag and the response does not contain the ID (but the ID doesn't change)
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
   gameCreateFlag(
     room: string,
@@ -566,12 +579,12 @@ export class ScreepsHttpClient extends EventEmitter {
     color: FlagColor = FlagColor.White,
     secondaryColor: FlagColor = FlagColor.White,
     shard?: string
-  ): Promise<Api.DbUpsertedResponse> {
+  ): Promise<Http.ScreepsDbUpsertResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/create-flag', { name, room, x, y, color, secondaryColor, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/create-flag', { name, room, x, y, color, secondaryColor, shard })
   }
 
   /**
@@ -582,17 +595,17 @@ export class ScreepsHttpClient extends EventEmitter {
    *
    * Endpoint: `POST /api/game/gen-unique-flag-name`
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameGenUniqueFlagName(shard?: string): Promise<Api.GameGenUniqueNameResponse> {
+  gameGenUniqueFlagName(shard?: string): Promise<Http.GameGenUniqueNameResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/gen-unique-flag-name', { shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/gen-unique-flag-name', { shard })
   }
 
   /**
@@ -604,18 +617,18 @@ export class ScreepsHttpClient extends EventEmitter {
    * Endpoint: `POST /api/game/check-unique-flag-name`
    * @param name The name to check
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server.
    *  Also throws an error if the flag name is already in use.
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameCheckUniqueFlagName(name: string, shard?: string): Promise<Api.Response> {
+  gameCheckUniqueFlagName(name: string, shard?: string): Promise<Http.ScreepsResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/check-unique-flag-name', { name, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/check-unique-flag-name', { name, shard })
   }
 
   /**
@@ -625,21 +638,21 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param color The color of the left side of the flag
    * @param secondaryColor The color of the right side of the flag
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
   gameChangeFlagColor(
     color: FlagColor = FlagColor.White,
     secondaryColor: FlagColor = FlagColor.White,
     shard?: string
-  ): Promise<Api.DbModifiedResponse> {
+  ): Promise<Http.ScreepsDbUpdateResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/change-flag-color', { color, secondaryColor, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/change-flag-color', { color, secondaryColor, shard })
   }
 
   /**
@@ -649,17 +662,17 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param room The name of the room in which the flag is placed
    * @param name The name of the flag to remove
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameRemoveFlag(room: string, name: string, shard?: string): Promise<Api.DbModifiedResponse> {
+  gameRemoveFlag(room: string, name: string, shard?: string): Promise<Http.ScreepsDbUpdateResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/remove-flag', { name, room, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/remove-flag', { name, room, shard })
   }
 
   /**
@@ -673,8 +686,8 @@ export class ScreepsHttpClient extends EventEmitter {
    * @param name name of the intent (ex: 'move')
    * @param intent JSON string describing the target(s) of the intent (for actions like 'heal' or 'build')
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
    * @example remove flag: name = "remove", intent = {}
    * @example destroy structure: _id = "room", name = "destroyStructure", intent = [ {id: <structure id>, roomName, <room name>, user: <user id>} ]
@@ -683,7 +696,7 @@ can destroy multiple structures at once
    * @example unclaim controller: name = "unclaim", intent = {id: <controller id>}
 intent can be an empty object for suicide and unclaim, but the web interface sends the id in it, as described
    * @example remove construction site: name = "remove", intent = {}
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
   gameAddObjectIntent(
     _id: string,
@@ -691,17 +704,17 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
     name: string,
     intent?: string,
     shard?: string
-  ): Promise<Api.DbUpsertedResponse> {
+  ): Promise<Http.ScreepsDbUpsertResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/add-object-intent', { _id, room, name, intent, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/add-object-intent', { _id, room, name, intent, shard })
   }
 
   /**
-   * Create a {@link Api.ConstructionSite | construction site} for a new
-   * {@link Api.Structure | structure}.
+   * Create a {@link ConstructionSite | construction site} for a new
+   * {@link Structure | structure}.
    *
    * Unlike the runtime API equivalent of this endpoint, room visibility
    * is not required here.
@@ -714,44 +727,44 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param name An optional name to assign to the placed structure.
    *  This should be undefined unless `structureType` is 'spawn'.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
   gameCreateConstruction(
     room: string,
     x: number,
     y: number,
-    structureType: Api.BuildableStructureConstant,
+    structureType: BuildableStructureConstant,
     name?: string,
     shard?: string
-  ): Promise<Api.GameCreateConstructionResponse> {
+  ): Promise<Http.GameCreateConstructionResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/create-construction', { room, x, y, structureType, name, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/create-construction', { room, x, y, structureType, name, shard })
   }
 
   /**
-   * Enable or disable attack notifications on a single {@link Api.RoomObject | room object}.
+   * Enable or disable attack notifications on a single {@link RoomObject | room object}.
    *
    * Endpoint: `POST /api/game/set-notify-when-attacked`
    * @param _id ID of the room object
    * @param enabled `true` to enable notifications, or `false` to disable notifications
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameSetNotifyWhenAttacked(_id: string, enabled = true, shard?: string): Promise<Api.DbModifiedResponse> {
+  gameSetNotifyWhenAttacked(_id: string, enabled = true, shard?: string): Promise<Http.ScreepsDbUpdateResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/set-notify-when-attacked', { _id, enabled, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/set-notify-when-attacked', { _id, enabled, shard })
   }
 
   /**
@@ -777,10 +790,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *  part types, boost types, and behavior.
    * @param boosted If `true`, the invader will be spawned with boosted parts.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
   gameCreateInvader(
     room: string,
@@ -790,12 +803,12 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
     type: 'Melee' | 'Ranged' | 'Healer',
     boosted = false,
     shard?: string
-  ): Promise<Api.UnknownResponse> {
+  ): Promise<Http.ScreepsUnknownResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/create-invader', { room, x, y, size, type, boosted, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/create-invader', { room, x, y, size, type, boosted, shard })
   }
 
   /**
@@ -807,17 +820,17 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Endpoint: `POST /api/game/remove-invader`
    * @param _id The ID of the invader creep to remove
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameRemoveInvader(_id: string, shard?: string): Promise<Api.UnknownResponse> {
+  gameRemoveInvader(_id: string, shard?: string): Promise<Http.ScreepsUnknownResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/game/remove-invader', { _id, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/game/remove-invader', { _id, shard })
   }
 
   /**
@@ -825,17 +838,17 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/game/time`
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameTime(shard?: string): Promise<Api.GameTimeResponse> {
+  gameTime(shard?: string): Promise<Http.GameTimeResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/time', { shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/time', { shard })
   }
 
   /**
@@ -843,55 +856,55 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/game/world-size`
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameWorldSize(shard?: string): Promise<Api.GameWorldSizeResponse> {
+  gameWorldSize(shard?: string): Promise<Http.GameWorldSizeResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/world-size', { shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/world-size', { shard })
   }
 
   /**
-   * Fetch all active {@link Api.Decorations.Instance | decorations} for a specific room.
+   * Fetch all active {@link DecorationInstance | decorations} for a specific room.
    *
    * Endpoint: `GET /api/game/room-decorations`
    * @param room The name of the room
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameRoomDecorations(room: string, shard?: string): Promise<Api.GameRoomDecorationsResponse> {
+  gameRoomDecorations(room: string, shard?: string): Promise<Http.GameRoomDecorationsResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/room-decorations', { room, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/room-decorations', { room, shard })
   }
 
   /**
-   * Fetch all {@link Api.RoomObject | room objects} present in a specific room.
+   * Fetch all {@link RoomObject | room objects} present in a specific room.
    *
    * Endpoint: `GET /api/game/room-objects`
    * @param room The name of the room
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameRoomObjects(room: string, shard?: string): Promise<Api.GameRoomObjectsResponse> {
+  gameRoomObjects(room: string, shard?: string): Promise<Http.GameRoomObjectsResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/room-objects', { room, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/room-objects', { room, shard })
   }
 
   /**
@@ -900,18 +913,18 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Endpoint: `GET /api/game/room-terrain`
    * @param room The name of the room
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
    * @see {@link gameRoomTerrainUnencoded} for an alternative response format
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameRoomTerrain(room: string, shard?: string): Promise<Api.GameRoomTerrainEncodedResponse> {
+  gameRoomTerrain(room: string, shard?: string): Promise<Http.GameRoomTerrainEncodedResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/room-terrain', { room, encoded: 1, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/room-terrain', { room, encoded: 1, shard })
   }
 
   /**
@@ -920,37 +933,37 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Endpoint: `GET /api/game/room-terrain`
    * @param room The name of the room
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
    * @see {@link gameRoomTerrain} for an alternative response format
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameRoomTerrainUnencoded(room: string, shard?: string): Promise<Api.GameRoomTerrainUnencodedResponse> {
+  gameRoomTerrainUnencoded(room: string, shard?: string): Promise<Http.GameRoomTerrainUnencodedResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/room-terrain', { room, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/room-terrain', { room, shard })
   }
 
   /**
-   * Look up the {@link Api.RoomStatus | status of a room}.
+   * Look up the {@link RoomStatus | status of a room}.
    *
    * Endpoint: `GET /api/game/room-status`
    * @param room The name of the room
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
-  gameRoomStatus(room: string, shard?: string): Promise<Api.GameRoomStatusResponse> {
+  gameRoomStatus(room: string, shard?: string): Promise<Http.GameRoomStatusResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/room-status', { room, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/room-status', { room, shard })
   }
 
   /**
@@ -963,21 +976,21 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * - 180: 3 hours each; 24 hours total
    * - 1440: 24 hours each; 8 days total
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game
+   * @category Endpoints: /game
    */
   gameRoomOverview(
     room: string,
-    interval: Api.RoomStatInterval = 8,
+    interval: RoomStatInterval = 8,
     shard?: string
-  ): Promise<Api.GameRoomOverviewResponse> {
+  ): Promise<Http.GameRoomOverviewResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/room-overview', { room, interval, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/room-overview', { room, interval, shard })
   }
 
   /**
@@ -987,59 +1000,59 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/game/market/orders-index`
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game/market
+   * @category Endpoints: /game/market
    */
-  gameMarketOrdersIndex(shard?: string): Promise<Api.GameMarketIndexResponse> {
+  gameMarketOrdersIndex(shard?: string): Promise<Http.GameMarketIndexResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/market/orders-index', { shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/market/orders-index', { shard })
   }
 
   /**
    * Fetch all unexpired market orders created by the authenticated user.
    *
    * Endpoint: `GET /api/game/market/my-orders`
-   * @category Endpoint Methods: /game/market
+   * @category Endpoints: /game/market
    */
-  gameMarketMyOrders(): Promise<Api.GameMarketMyOrdersResponse> {
-    return this.req('GET', '/api/game/market/my-orders').then(this.mapToShard)
+  gameMarketMyOrders(): Promise<Http.GameMarketMyOrdersResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/game/market/my-orders').then(this.mapToShard)
   }
 
   /**
    * Fetch all active market orders for a given resource type.
    *
    * Endpoint: `GET /api/game/market/orders`
-   * @param resourceType Any {@link Api.MarketResourceConstant | resource type}
-   * @param shard If `resourceType` is an {@link Api.IntershardResourceConstant}, this must be set to `undefined`.
-   *  {@link ClientConfig.defaultShard} is ignored here for compatibility with intershard resources.
-   * @category Endpoint Methods: /game/market
+   * @param resourceType Any {@link MarketResourceConstant | resource type}
+   * @param shard If `resourceType` is an {@link IntershardResourceConstant}, this must be set to `undefined`.
+   *  {@link ScreepsClientConfig.defaultShard} is ignored here for compatibility with intershard resources.
+   * @category Endpoints: /game/market
    */
-  gameMarketOrders(resourceType: Api.MarketResourceConstant, shard?: string): Promise<Api.GameMarketOrdersResponse> {
-    return this.req('GET', '/api/game/market/orders', { resourceType, shard })
+  gameMarketOrders(resourceType: MarketResourceConstant, shard?: string): Promise<Http.GameMarketOrdersResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/game/market/orders', { resourceType, shard })
   }
 
   /**
    * Fetch market history data for a given resource type.
    *
    * Endpoint: `GET /api/game/market/stats`
-   * @param resourceType Any {@link Api.MarketResourceConstant | resource type}
+   * @param resourceType Any {@link MarketResourceConstant | resource type}
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /game/market
+   * @category Endpoints: /game/market
    */
-  gameMarketStats(resourceType: Api.MarketResourceConstant, shard?: string): Promise<Api.GameMarketStatsResponse> {
+  gameMarketStats(resourceType: MarketResourceConstant, shard?: string): Promise<Http.GameMarketStatsResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/game/market/stats', { resourceType, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/game/market/stats', { resourceType, shard })
   }
 
   /**
@@ -1048,10 +1061,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * This endpoint does not require authentication.
    *
    * Endpoint: `GET /api/game/shards/info`
-   * @category Endpoint Methods: /game/shards
+   * @category Endpoints: /game/shards
    */
-  gameShardsInfo(): Promise<Api.GameShardsInfoResponse> {
-    return this.req('GET', '/api/game/shards/info')
+  gameShardsInfo(): Promise<Http.GameShardsInfoResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/game/shards/info')
   }
 
   /**
@@ -1066,16 +1079,16 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *  position that should be included in the response
    * @param season A date in the format `YYYY-MM`, NOT a seasonal world name/number.
    *  Defaults to the current season.
-   * @category Endpoint Methods: /leaderboard
+   * @category Endpoints: /leaderboard
    */
   leaderboardList(
     limit = 10,
-    mode: Api.LeaderboardType = 'world',
+    mode: Http.LeaderboardMode = Http.LeaderboardMode.World,
     offset: number | null = 0,
     season?: string
-  ): Promise<Api.LeaderboardListResponse> {
+  ): Promise<Http.LeaderboardListResponse> {
     season ??= this.currentLeaderboardSeason
-    return this.req('GET', '/api/leaderboard/list', { limit, mode, offset, season })
+    return this.req(ScreepsHttpMethod.GET, '/api/leaderboard/list', { limit, mode, offset, season })
   }
 
   /**
@@ -1088,14 +1101,14 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param mode 'world' (control points) or 'power' (power processed)
    * @param season An optional date in the format YYYY-MM.
    *  If undefined, the user's ranks for all seasons is returned.
-   * @category Endpoint Methods: /leaderboard
+   * @category Endpoints: /leaderboard
    */
   leaderboardFind(
     username: string,
-    mode: Api.LeaderboardType = 'world',
+    mode: Http.LeaderboardMode = Http.LeaderboardMode.World,
     season?: string
-  ): Promise<Api.LeaderboardFindResponse> {
-    return this.req('GET', '/api/leaderboard/find', { season, mode, username })
+  ): Promise<Http.LeaderboardFindResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/leaderboard/find', { season, mode, username })
   }
 
   /**
@@ -1107,10 +1120,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * This endpoint does not require authentication.
    *
    * Endpoint: `GET /api/leaderboard/seasons`
-   * @category Endpoint Methods: /leaderboard
+   * @category Endpoints: /leaderboard
    */
-  leaderboardSeasons(): Promise<Api.LeaderboardSeasonsResponse> {
-    return this.req('GET', '/api/leaderboard/seasons')
+  leaderboardSeasons(): Promise<Http.LeaderboardSeasonsResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/leaderboard/seasons')
   }
 
   /**
@@ -1121,45 +1134,45 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @throws {ScreepsApiError} HTTP 404 if called on an unofficial server
    * @returns Metadata on the current season, or null if a seasonal world
    *  competition is not active or about to start
-   * @category Endpoint Methods: /seasons
+   * @category Endpoints: /seasons
    */
-  seasonsCurrent(): Promise<Api.SeasonsCurrentResponse | null> {
-    return this.req('GET', '/api/seasons/current')
+  seasonsCurrent(): Promise<Http.SeasonsCurrentResponse | null> {
+    return this.req(ScreepsHttpMethod.GET, '/api/seasons/current')
   }
 
   /**
    * Unlock CPU on PTR for one week.
    *
    * Endpoint: `POST /api/user/activate-ptr`
-   * @returns an {@link Api.Response} on PTR, or an {@link Api.ErrorResponse}
+   * @returns an {@link Http.ScreepsResponse} on PTR, or an {@link Http.ScreepsErrorResponse}
    *  (`{ error: 'not ptr' }`) on official servers that are not PTR.
    * @throws {ScreepsApiError} HTTP 404 on unofficial servers
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userActivatePtr(): Promise<Api.Response | Api.ErrorResponse> {
-    return this.req('POST', '/api/user/activate-ptr')
+  userActivatePtr(): Promise<Http.ScreepsResponse | Http.ScreepsErrorResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/activate-ptr')
   }
 
   /**
-   * Update the authenticated user's {@link Api.Badge | badge}.
+   * Update the authenticated user's {@link UserBadge | badge}.
    *
    * Endpoint: `POST /api/user/badge`
-   * @param badge The new user's new badge. See {@link Api.Badge}
-   * @category Endpoint Methods: /user
+   * @param badge The new user's new badge. See {@link UserBadge}
+   * @category Endpoints: /user
    */
-  userBadge(badge: Api.Badge): Promise<Api.DbModifiedResponse> {
-    return this.req('POST', '/api/user/badge', { badge })
+  userBadge(badge: UserBadge): Promise<Http.ScreepsDbUpdateResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/badge', { badge })
   }
 
   /**
    * Update the authenticated user's shard CPU limits.
    *
    * Endpoint: `POST /api/user/cpu-shards`
-   * @param cpu The user's new shard CPU limits. See {@link Api.CpuShardLimits}
-   * @category Endpoint Methods: /user
+   * @param cpu The user's new shard CPU limits. See {@link CpuShardLimits}
+   * @category Endpoints: /user
    */
-  userCpuShards(cpu: Api.CpuShardLimits): Promise<Api.DbModifiedResponse> {
-    return this.req('POST', '/api/user/cpu-shards', { cpu })
+  userCpuShards(cpu: CpuShardLimits): Promise<Http.ScreepsDbUpdateResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/cpu-shards', { cpu })
   }
 
   /**
@@ -1167,10 +1180,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * to pick a new spawn room.
    *
    * Endpoint: `POST /api/user/respawn`
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userRespawn(): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/respawn')
+  userRespawn(): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/respawn')
   }
 
   /**
@@ -1182,10 +1195,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *  - 'activeWorld': activate branch on the server
    *  - 'activeSim': activate branch on the simulator
    * @see {@link userBranches} to list available branches
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userSetActiveBranch(branch: string, activeName: 'activeWorld' | 'activeSim'): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/set-active-branch', { branch, activeName })
+  userSetActiveBranch(branch: string, activeName: 'activeWorld' | 'activeSim'): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/set-active-branch', { branch, activeName })
   }
 
   /**
@@ -1196,14 +1209,14 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param newName The name of the new code branch
    * @param defaultModules Do you know what this does? If so, please submit a PR!
    * @see {@link userBranches} to list available branches
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
   userCloneBranch(
     branch: string,
     newName: string,
     defaultModules: unknown
-  ): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/clone-branch', { branch, newName, defaultModules })
+  ): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/clone-branch', { branch, newName, defaultModules })
   }
 
   /**
@@ -1211,31 +1224,31 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `POST /api/user/delete-branch`
    * @param branch The name of the code branch to delete
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userDeleteBranch(branch: string): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/delete-branch', { branch })
+  userDeleteBranch(branch: string): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/delete-branch', { branch })
   }
 
   /**
    * Update the authenticated user's notification preferences.
    *
    * Endpoint: `POST /api/user/notify-prefs`
-   * @param prefs See {@link Api.UserNotifyPrefsRequest}
-   * @category Endpoint Methods: /user
+   * @param prefs See {@link Http.UserNotifyPrefsRequest}
+   * @category Endpoints: /user
    */
-  userNotifyPrefs(prefs: Api.UserNotifyPrefsRequest): Promise<Api.DbModifiedResponse> {
-    return this.req('POST', '/api/user/notify-prefs', prefs)
+  userNotifyPrefs(prefs: Http.UserNotifyPrefsRequest): Promise<Http.ScreepsDbUpdateResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/notify-prefs', prefs)
   }
 
   /**
    * Mark tutorial as completed for the authenticated user.
    *
    * Endpoint: `POST /api/user/tutorial-done`
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userTutorialDone(): Promise<Api.Response> {
-    return this.req('POST', '/api/user/tutorial-done')
+  userTutorialDone(): Promise<Http.ScreepsResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/tutorial-done')
   }
 
   /**
@@ -1243,10 +1256,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `POST /api/user/email`
    * @param email The user's new email address
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userEmail(email: string): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/email', { email })
+  userEmail(email: string): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/email', { email })
   }
 
   /**
@@ -1256,22 +1269,22 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/user/world-start-room`
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @category Endpoint Methods: /user
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @category Endpoints: /user
    */
-  userWorldStartRoom(shard?: string): Promise<Api.UserWorldStartRoomResponse> {
+  userWorldStartRoom(shard?: string): Promise<Http.UserWorldStartRoomResponse> {
     shard ??= this.appConfig.defaultShard
-    return this.req('GET', '/api/user/world-start-room', { shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/user/world-start-room', { shard })
   }
 
   /**
    * Get the authenticated user's status on the server.
    *
    * Endpoint: `GET /api/user/world-status`
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userWorldStatus(): Promise<Api.UserWorldStatusResponse> {
-    return this.req('GET', '/api/user/world-status')
+  userWorldStatus(): Promise<Http.UserWorldStatusResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/world-status')
   }
 
   /**
@@ -1279,10 +1292,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * on the server.
    *
    * Endpoint: `GET /api/user/branches`
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userBranches(): Promise<Api.UserBranchesResponse> {
-    return this.req('GET', '/api/user/branches')
+  userBranches(): Promise<Http.UserBranchesResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/branches')
   }
 
   /**
@@ -1293,10 +1306,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param branch the name of the branch from which to pull code
    * @see https://docs.screeps.com/commit.html
    * @see {@link userBranches} to list available branches
-   * @category Endpoint Methods: /user/code
+   * @category Endpoints: /user/code
    */
-  userCodeGet(branch: string): Promise<Api.UserCodeGetResponse> {
-    return this.req('GET', '/api/user/code', { branch })
+  userCodeGet(branch: string): Promise<Http.UserCodeGetResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/code', { branch })
   }
 
   /**
@@ -1307,91 +1320,91 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param params.branch the name of the branch for which to upload code
    * @param params.modules JavScript code and WASM binaries to upload keyed by module name
    * @see https://docs.screeps.com/commit.html
-   * @category Endpoint Methods: /user/code
+   * @category Endpoints: /user/code
    */
-  userCodeSet(params: Api.UserCodeSetRequest): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/code', params)
+  userCodeSet(params: Http.UserCodeSetRequest): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/code', params)
   }
 
   /**
-   * Fetch all of the authenticated user's {@link Api['Decorations']['Instance'] | decorations}.
+   * Fetch all of the authenticated user's {@link DecorationInstance | decorations}.
    *
    * Endpoint: `GET /api/user/decorations/inventory`
-   * @category Endpoint Methods: /user/decorations
+   * @category Endpoints: /user/decorations
    */
-  userDecorationsInventory(): Promise<Api.UserDecorationInventoryResponse> {
-    return this.req('GET', '/api/user/decorations/inventory')
+  userDecorationsInventory(): Promise<Http.UserDecorationInventoryResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/decorations/inventory')
   }
 
   /**
-   * Fetch all themes under which the user's {@link Api['Decorations']['Instance'] | decorations}
+   * Fetch all themes under which the user's {@link DecorationInstance | decorations}
    * can be grouped.
    *
    * Endpoint: `GET /api/user/decorations/themes`
-   * @category Endpoint Methods: /user/decorations
+   * @category Endpoints: /user/decorations
    */
-  userDecorationsThemes(): Promise<Api.UserDecorationThemesResponse> {
-    return this.req('GET', '/api/user/decorations/themes')
+  userDecorationsThemes(): Promise<Http.UserDecorationThemesResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/decorations/themes')
   }
 
   /**
-   * Destroy one or more owned {@link Api['Decorations']['Instance'] | decorations}
+   * Destroy one or more owned {@link DecorationInstance | decorations}
    * to refund a fraction of their pixelization cost.
    *
    * Endpoint: `POST /api/user/decorations/convert`
    * @param decorations The IDs of one or more owned decorations
-   * @category Endpoint Methods: /user/decorations
+   * @category Endpoints: /user/decorations
    */
-  userDecorationsConvert(decorations: string[]): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/decorations/convert', { decorations })
+  userDecorationsConvert(decorations: string[]): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/decorations/convert', { decorations })
   }
 
   /**
    * Spend pixels to create one or more
-   * {@link Api['Decorations']['Instance'] | decorations}.
+   * {@link DecorationInstance | decorations}.
    *
    * Endpoint: `POST /api/user/decorations/pixelize`
    * @param count The number of decorations to generate.
    * @param theme The theme from which to generate decorations.
    *  Note that specifying a theme increases the pixelization cost.
    *  Set to an empty string to create decorations from any theme.
-   * @category Endpoint Methods: /user/decorations
+   * @category Endpoints: /user/decorations
    */
-  userDecorationsPixelize(count: number, theme = ''): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/decorations/pixelize', { count, theme })
+  userDecorationsPixelize(count: number, theme = ''): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/decorations/pixelize', { count, theme })
   }
 
   /**
-   * Apply / activate a {@link Api['Decorations']['Instance'] | decoration} to a creep/object/room.
+   * Apply / activate a {@link DecorationInstance | decoration} to a creep/object/room.
    *
    * Endpoint: `POST /api/user/decorations/activate`
    * @param _id the ID of the decoration to activate
-   * @param active values to assign to configurable {@link Api['Decorations']['Decoration'].props | properties}
-   * @category Endpoint Methods: /user/decorations
+   * @param active values to assign to configurable {@link Decoration.props | properties}
+   * @category Endpoints: /user/decorations
    */
-  userDecorationsActivate(_id: string, active: object): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/decorations/activate', { _id, active })
+  userDecorationsActivate(_id: string, active: object): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/decorations/activate', { _id, active })
   }
 
   /**
-   * Remove / deactivate one or more active {@link Api['Decorations']['Instance'] | decorations}.
+   * Remove / deactivate one or more active {@link DecorationInstance | decorations}.
    *
    * Endpoint: `POST /api/user/decorations/deactivate`
    * @param decorations The IDs of one or more active decorations
-   * @category Endpoint Methods: /user/decorations
+   * @category Endpoints: /user/decorations
    */
-  userDecorationsDeactivate(decorations: string[]): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/decorations/deactivate', { decorations })
+  userDecorationsDeactivate(decorations: string[]): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/decorations/deactivate', { decorations })
   }
 
   /**
    * Look up the name of the room in which this player may not respawn.
    *
    * Endpoint: `GET /api/user/respawn-prohibited-rooms`
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userRespawnProhibitedRooms(): Promise<Api.UserRespawnProhibitedRoomsResponse> {
-    return this.req('GET', '/api/user/respawn-prohibited-rooms')
+  userRespawnProhibitedRooms(): Promise<Http.UserRespawnProhibitedRoomsResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/respawn-prohibited-rooms')
   }
 
   /**
@@ -1402,17 +1415,17 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param path The portion of the Memory JSON object to retrieve (ex: 'flags.Flag1').
    *  If undefined/empty, returns the entire Memory object.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /user/memory
+   * @category Endpoints: /user/memory
    */
-  userMemoryGet(path?: string, shard?: string): Promise<Api.UserMemoryGetResponse> {
+  userMemoryGet(path?: string, shard?: string): Promise<Http.UserMemoryGetResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('GET', '/api/user/memory', { path, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/user/memory', { path, shard })
   }
 
   /**
@@ -1425,17 +1438,17 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param value The value to write to the specified Memory path. This will
    *  completely replace the previous value.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /user/memory
+   * @category Endpoints: /user/memory
    */
-  userMemorySet(path: string | undefined, value: unknown, shard?: string): Promise<Api.UserMemorySetResponse> {
+  userMemorySet(path: string | undefined, value: unknown, shard?: string): Promise<Http.UserMemorySetResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/user/memory', { path, value, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/user/memory', { path, value, shard })
   }
 
   /**
@@ -1446,24 +1459,24 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param segment One or more segment IDs to read. Multiple IDs can be
    *  specified in a single string by separating the IDs with commas.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
    * @example
    * // Fetch a single segment
-   * api.user.memory.segment.get(7, 'shard3')
+   * Http.user.memory.segment.get(7, 'shard3')
    * @example
    * // Fetch a multiple segments with an ID array
-   * api.user.memory.segment.get([7, '13'], 'shard3')
+   * Http.user.memory.segment.get([7, '13'], 'shard3')
    * @example
    * // Fetch a multiple segments with a comma-delimited ID list
-   * api.user.memory.segment.get('7,13,30', 'shard3')
-   * @category Endpoint Methods: /user/memory/segment
+   * Http.user.memory.segment.get('7,13,30', 'shard3')
+   * @category Endpoints: /user/memory/segment
    */
   userMemorySegmentGet(
     segment: number | string | (number | string)[],
     shard?: string
-  ): Promise<Api.UserMemorySegmentGetResponse> {
+  ): Promise<Http.UserMemorySegmentGetResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
@@ -1473,7 +1486,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
       segment = segment.map(s => s.toString()).join()
     }
 
-    return this.req('GET', '/api/user/memory-segment', { segment, shard })
+    return this.req(ScreepsHttpMethod.GET, '/api/user/memory-segment', { segment, shard })
   }
 
   /**
@@ -1485,12 +1498,12 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param data The data to write to the segment. Non-string values will be
    *  serialized on the server side.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /user/memory/segment
+   * @category Endpoints: /user/memory/segment
    */
-  userMemorySegmentSet(segment: number | string, data: unknown, shard?: string): Promise<Api.Response> {
+  userMemorySegmentSet(segment: number | string, data: unknown, shard?: string): Promise<Http.ScreepsResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
@@ -1500,7 +1513,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
       throw new Error('Only one segment can be written per request')
     }
 
-    return this.req('POST', '/api/user/memory-segment', { segment, data, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/user/memory-segment', { segment, data, shard })
   }
 
   /**
@@ -1508,30 +1521,30 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/user/messages/list`
    * @param respondent The long `_id` of the user, not the username
-   * @category Endpoint Methods: /user/messages
+   * @category Endpoints: /user/messages
    */
-  userMessagesList(respondent: string): Promise<Api.UserMessagesListResponse> {
-    return this.req('GET', '/api/user/messages/list', { respondent })
+  userMessagesList(respondent: string): Promise<Http.UserMessagesListResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/messages/list', { respondent })
   }
 
   /**
    * Fetch the last message from every thread in the authenticated user's inbox.
    *
    * Endpoint: `GET /api/user/messages/index`
-   * @category Endpoint Methods: /user/messages
+   * @category Endpoints: /user/messages
    */
-  userMessagesIndex(): Promise<Api.UserMessagesIndexResponse> {
-    return this.req('GET', '/api/user/messages/index')
+  userMessagesIndex(): Promise<Http.UserMessagesIndexResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/messages/index')
   }
 
   /**
    * Fetch the authenticated user's number of unread messages.
    *
    * Endpoint: `GET /api/user/messages/unread-count`
-   * @category Endpoint Methods: /user/messages
+   * @category Endpoints: /user/messages
    */
-  userMessagesUnreadCount(): Promise<Api.UserMessagesUnreadCountResponse> {
-    return this.req('GET', '/api/user/messages/unread-count')
+  userMessagesUnreadCount(): Promise<Http.UserMessagesUnreadCountResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/messages/unread-count')
   }
 
   /**
@@ -1540,10 +1553,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Endpoint: `POST /api/user/messages/send`
    * @param respondent The long `_id` of the user, not the username
    * @param text The text of the message to send
-   * @category Endpoint Methods: /user/messages
+   * @category Endpoints: /user/messages
    */
-  userMessagesSend(respondent: string, text: string): Promise<Api.UnknownResponse> {
-    return this.req('POST', '/api/user/messages/send', { respondent, text })
+  userMessagesSend(respondent: string, text: string): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/messages/send', { respondent, text })
   }
 
   /**
@@ -1551,10 +1564,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `POST /api/user/messages/mark-read`
    * @param id The ID of the message to mark as read
-   * @category Endpoint Methods: /user/messages
+   * @category Endpoints: /user/messages
    */
-  userMessagesMarkRead(id: string): Promise<Api.UserMessagesMarkReadResponse> {
-    return this.req('POST', '/api/user/messages/mark-read', { id })
+  userMessagesMarkRead(id: string): Promise<Http.UserMessagesMarkReadResponse> {
+    return this.req(ScreepsHttpMethod.POST, '/api/user/messages/mark-read', { id })
   }
 
   /**
@@ -1563,10 +1576,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Endpoint: `GET /api/user/find`
    * @param username The complete username of the user
    * @see {@link userFindById} to find a user by ID instead of username
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userFind(username: string): Promise<Api.UserFindResponse> {
-    return this.req('GET', '/api/user/find', { username })
+  userFind(username: string): Promise<Http.UserFindResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/find', { username })
   }
 
   /**
@@ -1575,10 +1588,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Endpoint: `GET /api/user/find`
    * @param id The ID of the user
    * @see {@link userFind} to find a user by username instead of ID
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userFindById(id: string): Promise<Api.UserFindResponse> {
-    return this.req('GET', '/api/user/find', { id })
+  userFindById(id: string): Promise<Http.UserFindResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/find', { id })
   }
 
   /**
@@ -1591,10 +1604,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * - 180: Past day
    * - 1440: Past week (actually 8 days)
    * @see {@link userOverview} for more detailed stats for the authenticated user
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userStats(id: string, interval: Api.RoomStatInterval): Promise<Api.UserStatsResponse> {
-    return this.req('GET', '/api/user/stats', { id, interval })
+  userStats(id: string, interval: RoomStatInterval): Promise<Http.UserStatsResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/stats', { id, interval })
   }
 
   /**
@@ -1602,10 +1615,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/user/rooms`
    * @param id The ID of the user
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userRooms(id: string): Promise<Api.UserRoomsResponse> {
-    return this.req('GET', '/api/user/rooms', { id }).then(this.mapToShard)
+  userRooms(id: string): Promise<Http.UserRoomsResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/rooms', { id }).then(this.mapToShard)
   }
 
   /**
@@ -1617,13 +1630,13 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * - 180: 3 hours each; 24 hours total
    * - 1440: 24 hours each; 8 days total
    * @param statName The stat to view for this user
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
   userOverview(
-    interval: Api.RoomStatInterval = 8,
-    statName: Api.RoomStat = 'energyControl'
-  ): Promise<Api.UserOverviewResponse> {
-    return this.req('GET', '/api/user/overview', { interval, statName })
+    interval: RoomStatInterval = 8,
+    statName: RoomStat = RoomStat.EnergyControl
+  ): Promise<Http.UserOverviewResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/overview', { interval, statName })
   }
 
   /**
@@ -1631,10 +1644,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/user/money-history`
    * @param page Used for pagination
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userMoneyHistory(page = 0): Promise<Api.UserMoneyHistoryResponse> {
-    return this.req('GET', '/api/user/money-history', { page })
+  userMoneyHistory(page = 0): Promise<Http.UserMoneyHistoryResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/money-history', { page })
   }
 
   /**
@@ -1647,27 +1660,27 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Endpoint: `POST /api/user/console`
    * @param expression The JavaScript expression to evaluate.
    * @param shard The name of the shard to use (ignored by unofficial servers).
-   *  Defaults to {@link ClientConfig.defaultShard} if undefined.
-   * @throws {Error} if shard and {@link ClientConfig.defaultShard} are undefined
+   *  Defaults to {@link ScreepsClientConfig.defaultShard} if undefined.
+   * @throws {Error} if shard and {@link ScreepsClientConfig.defaultShard} are undefined
    *  while using an official server
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userConsole(expression: string, shard?: string): Promise<Api.UserConsoleResponse> {
+  userConsole(expression: string, shard?: string): Promise<Http.UserConsoleResponse> {
     shard ??= this.appConfig.defaultShard
     if (this.isOfficialServer && shard === undefined) {
       throw new Error('shard must be defined')
     }
-    return this.req('POST', '/api/user/console', { expression, shard })
+    return this.req(ScreepsHttpMethod.POST, '/api/user/console', { expression, shard })
   }
 
   /**
    * Fetch the authenticated user's username.
    *
    * Endpoint: `GET /api/user/name`
-   * @category Endpoint Methods: /user
+   * @category Endpoints: /user
    */
-  userName(): Promise<Api.UserNameResponse> {
-    return this.req('GET', '/api/user/name')
+  userName(): Promise<Http.UserNameResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/user/name')
   }
 
   /**
@@ -1676,20 +1689,20 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *
    * Endpoint: `GET /api/experimental/pvp`
    * @param interval Minimum time (in ticks?) since last combat action
-   * @category Endpoint Methods: /experimental
+   * @category Endpoints: /experimental
    */
-  experimentalPvp(interval = 100): Promise<Api.ExperimentalPvpResponse> {
-    return this.req('GET', '/api/experimental/pvp', { interval }).then(this.mapToShard)
+  experimentalPvp(interval = 100): Promise<Http.ExperimentalPvpResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/experimental/pvp', { interval }).then(this.mapToShard)
   }
 
   /**
    * Find all active nuclear launches.
    *
    * Endpoint: `GET /api/experimental/nukes`
-   * @category Endpoint Methods: /experimental
+   * @category Endpoints: /experimental
    */
-  experimentalNukes(): Promise<Api.ExperimentalNukesResponse> {
-    return this.req('GET', '/api/experimental/nukes').then(this.mapToShard)
+  experimentalNukes(): Promise<Http.ExperimentalNukesResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/experimental/nukes').then(this.mapToShard)
   }
 
   /**
@@ -1702,10 +1715,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @param interval Minimum time (in ticks?) since last observed PVP activity
    * @see {@link https://screepspl.us/warpath/classifications/ | Warpath Conflict Classifications} for
    *  the criteria used to assign conflict levels
-   * @category Endpoint Methods: /warpath
+   * @category Endpoints: /warpath
    */
-  warpathBattles(interval = 100): Promise<Api.UnknownResponse> {
-    return this.req('GET', '/api/warpath/battles', { interval })
+  warpathBattles(interval = 100): Promise<Http.ScreepsUnknownResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/warpath/battles', { interval })
   }
 
   /**
@@ -1718,15 +1731,15 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    *  position that should be included in the response
    * @param limit The number of users to return per request.
    *  The maximum valid value is 20.
-   * @category Endpoint Methods: /scoreboard
+   * @category Endpoints: /scoreboard
    */
-  scoreboardList(offset = 0, limit = 20): Promise<Api.ScoreboardListResponse> {
-    return this.req('GET', '/api/scoreboard/list', { limit, offset })
+  scoreboardList(offset = 0, limit = 20): Promise<Http.ScoreboardListResponse> {
+    return this.req(ScreepsHttpMethod.GET, '/api/scoreboard/list', { limit, offset })
   }
 
   /**
    * Get the current leaderboard season (not the current seasonal world season)
-   * @see {@link leaderboards}
+   * @see the `Endpoints: /leaderboard` category
    */
   get currentLeaderboardSeason(): string {
     const now = new Date()
@@ -1764,7 +1777,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
     return res
   }
 
-  async setServer(rawServer: RawServerConfig) {
+  async setServer(rawServer: ScreepsRawServerConfig) {
     const server = configManager.normalizeServerConfig(rawServer)
     debugHttp(`setServer: ${server.url}`)
 
@@ -1789,7 +1802,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
 
   /**
    * Authenticate to the server using the email and password from the provided
-   * {@link ServerConfig}.
+   * {@link ScreepsServerConfig}.
    *
    * Typically, this should not be called directly; it will be triggered
    * automatically when a request is made to an endpoint that requires
@@ -1822,7 +1835,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * please consider submitting a PR to implement it.
    * @param method The HTTP method to use
    * @param path The URL path of the endpoint. This will be appeneded to
-   *  {@link ServerConfig.url}. Request parameters should be included for
+   *  {@link ScreepsServerConfig.url}. Request parameters should be included for
    *  `GET` requests.
    * @param body The body of the request (POST only)
    * @param retriesAttempted The number of retries already attempted due to
@@ -1830,7 +1843,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * @returns The parsed response body
    */
   async req(
-    method: Api.HttpMethod,
+    method: ScreepsHttpMethod,
     path: string,
     body = {},
     retriesAttempted = 0
@@ -1851,7 +1864,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
       })
     }
 
-    if (method === 'GET') {
+    if (method === ScreepsHttpMethod.GET) {
       req.params = body
     } else {
       req.data = body
@@ -1939,7 +1952,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
     return JSON.parse(ret.toString())
   }
 
-  private updateRateLimit(method: Api.HttpMethod, path: string, res: RateLimitResponse): RateLimitEvent {
+  private updateRateLimit(method: ScreepsHttpMethod, path: string, res: RateLimitResponse): RateLimitEvent {
     const {
       headers: {
         'x-ratelimit-limit': limit,
@@ -1997,11 +2010,10 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
 
   /**
    * Fetch and memoize information about the authenticated user.
-   * @returns If using an API token with full permissions, this returns
-   * {@link Api.AuthMeResponse}. Otherwise, it returns
-   * {@link Api.UserFindResponse.user}.
+   * @returns If using an API token with full permissions, {@link Http.AuthMeResponse}.
+   *  Otherwise the result it {@link Http.UserInfo}.
    */
-  async me(): Promise<Api.AuthMeResponse | Api.UserFindResponse['user']> {
+  async me(): Promise<Http.AuthMeResponse | Http.UserInfo> {
     if (this._user) return this._user
     const tokenInfo = await this.tokenInfo()
     if (tokenInfo.full) {
@@ -2018,7 +2030,7 @@ intent can be an empty object for suicide and unclaim, but the web interface sen
    * Fetch and memoize permissions and other information about the API token
    * currently being used by this client.
    */
-  async tokenInfo(): Promise<Api.TokenInfo> {
+  async tokenInfo(): Promise<Http.AuthQueryTokenResult> {
     if (!this.token) {
       await this.auth(new Error('Not authenticated; cannot query token info'))
     }
